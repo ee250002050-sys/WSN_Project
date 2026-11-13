@@ -3,11 +3,11 @@
 Keep this file beside wsn_lifetime_lp.py.
 
 Run:
-    pip install "streamlit>=1.35" scipy numpy pandas plotly streamlit-autorefresh
+    pip install "streamlit>=1.35" scipy numpy pandas plotly
     streamlit run wsn_dashboard.py
 
-The dashboard is an educational average-flow simulation. It does not model
-packet collisions, MAC scheduling, retransmissions, or radio hardware.
+The dashboard includes an LP-based average-flow model, editable network topology,
+energy simulation, optimization analysis and reproducible experiments.
 """
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_autorefresh import st_autorefresh
 from pathlib import Path
 
 from wsn_lifetime_lp import (
@@ -334,7 +333,7 @@ with st.sidebar:
     rate_scale = st.slider("Traffic-rate scale", 0.25, 3.0, float(st.session_state.rate_scale), 0.25)
     max_link_range = st.slider("Communication range (m; 0 = unlimited)", 0, 300, 0, 5)
     strategy = st.radio("Routing strategy", ["LP optimized", "Shortest-path baseline"])
-    if st.button("Generate fresh network", type="primary", use_container_width=True):
+    if st.button("Generate fresh network", type="primary", width="stretch"):
         st.session_state.sim_time = 0.0
         st.session_state.sim_running = False
         st.session_state.manual_edges = None
@@ -439,12 +438,12 @@ with tabs[0]:
         )])
         fig.update_layout(height=350, yaxis_title="Lifetime (s)", template="plotly_white",
                           margin=dict(l=10, r=10, t=25, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.subheader("Network snapshot")
         _, _, rates, _ = strategy_metrics(net, lp, baseline, strategy)
         _, energy, _, _ = strategy_metrics(net, lp, baseline, strategy)
         fractions = {i: energy[i] / net.battery[i] for i in net.battery}
-        st.plotly_chart(build_network_figure(net, rates, fractions), use_container_width=True)
+        st.plotly_chart(build_network_figure(net, rates, fractions), width="stretch")
 
 # ---------- Network simulator ----------
 with tabs[1]:
@@ -539,7 +538,7 @@ with tabs[1]:
     with colbtn:
         st.write("")
         st.write("")
-        if st.button("Apply node position", use_container_width=True):
+        if st.button("Apply node position", width="stretch"):
             pos[selected_node] = [new_x, new_y]
             st.session_state.manual_positions = pos
             st.session_state.sim_time = 0.0
@@ -568,12 +567,12 @@ with tabs[1]:
         else:
             edge = (node_a, node_b) if net.sink in (node_a, node_b) else tuple(sorted((node_a, node_b)))
             if edge in edge_list:
-                if st.button("Remove selected connection", use_container_width=True):
+                if st.button("Remove selected connection", width="stretch"):
                     st.session_state.manual_edges.remove(edge)
                     st.session_state.sim_time = 0.0
                     st.rerun()
             else:
-                if st.button("Add selected connection", use_container_width=True):
+                if st.button("Add selected connection", width="stretch"):
                     st.session_state.manual_edges.add(edge)
                     st.session_state.sim_time = 0.0
                     st.rerun()
@@ -588,7 +587,9 @@ with tabs[1]:
         st.success("Every sensor and the designated SOURCE can reach the sink. LP and baseline results are valid for this topology.")
 
 # ---------- Energy simulation ----------
-with tabs[2]:
+@st.fragment(run_every="100ms")
+def energy_simulation_fragment():
+    """Refresh only the energy simulation while keeping the rest of the dashboard interactive."""
     st.subheader("Average-flow battery depletion")
     st.warning(
         "This animation converts optimized/shortest-path average traffic rates into average power. "
@@ -602,17 +603,17 @@ with tabs[2]:
         st.write(f"**Strategy:** {strategy} · **Model lifetime:** {horizon:.4f} s")
         c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("▶ Play", use_container_width=True, type="primary"):
+            if st.button("▶ Play", width="stretch", type="primary"):
                 if float(st.session_state.sim_time) >= horizon - 1e-10:
                     st.session_state.sim_time = 0.0
                 st.session_state.sim_running = True
                 st.session_state.last_sim_tick = time.monotonic()
         with c2:
-            if st.button("Ⅱ Pause", use_container_width=True):
+            if st.button("Ⅱ Pause", width="stretch"):
                 st.session_state.sim_running = False
                 st.session_state.last_sim_tick = None
         with c3:
-            if st.button("↺ Reset", use_container_width=True):
+            if st.button("↺ Reset", width="stretch"):
                 st.session_state.sim_time = 0.0
                 st.session_state.sim_running = False
                 st.session_state.last_sim_tick = None
@@ -625,10 +626,9 @@ with tabs[2]:
                                  value=current_speed,
                                  format_func=lambda v: f"{v:g}×")
         st.session_state.sim_speed = speed
-        # Advance by actual wall-clock time between reruns. This avoids drift and
+        # Advance by actual wall-clock time between fragment refreshes. This avoids drift and
         # avoids depending on a fixed increment per rerun (which can stall).
         if st.session_state.sim_running:
-            st_autorefresh(interval=100, limit=None, key="wsn_energy_autorefresh_v2")
             now = time.monotonic()
             previous = st.session_state.last_sim_tick
             if previous is None:
@@ -657,13 +657,17 @@ with tabs[2]:
         m2.metric("Remaining sensor energy", f"{sum(remaining.values()):.5f} J")
         m3.metric("Depleted nodes", str(len(exhausted)))
         st.progress(min(1.0, t / horizon), text=f"{100*t/horizon:.1f}% of modeled lifetime")
-        st.plotly_chart(build_network_figure(net, rates, fractions_used, sim_time=t), use_container_width=True)
-        st.plotly_chart(make_energy_figure(net, power, horizon, t), use_container_width=True)
+        st.plotly_chart(build_network_figure(net, rates, fractions_used, sim_time=t), width="stretch")
+        st.plotly_chart(make_energy_figure(net, power, horizon, t), width="stretch")
         if exhausted:
             st.error("First depleted node(s): " + ", ".join(("SOURCE" if i == net.source else f"Sensor {i}") for i in exhausted))
         else:
             st.info(f"First battery depletion is predicted at t = {first_depletion:.4f} s.")
-        st.caption("Battery curves use each node's modeled TX + RX power. Playback advances using measured elapsed time between browser refreshes; 100× is a target speed and may be limited by browser/Streamlit rendering.")
+        st.caption("Battery curves use each node's modeled TX + RX power. Playback advances using measured elapsed time between fragment refreshes; 100× is a target speed and may be limited by browser/Streamlit rendering.")
+
+
+with tabs[2]:
+    energy_simulation_fragment()
 
 # ---------- Optimization & analysis ----------
 with tabs[3]:
@@ -682,7 +686,7 @@ with tabs[3]:
             "along its minimum-transmission-energy path."
         )
         df = rows_for_sensors(net, lp, baseline, strategy)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
         st.subheader("Battery shadow prices")
         st.markdown(
             "The LP minimizes `-T` internally, so the reported battery shadow price negates the solver's "
@@ -696,7 +700,7 @@ with tabs[3]:
         ))
         price_fig.update_layout(height=350, xaxis_title="Sensor", yaxis_title="Shadow price (s/J)",
                                 template="plotly_white", margin=dict(l=10, r=10, t=25, b=10))
-        st.plotly_chart(price_fig, use_container_width=True)
+        st.plotly_chart(price_fig, width="stretch")
         st.subheader("Complementary-slackness and bottleneck checks")
         slack_rows = []
         for i in sorted(net.battery):
@@ -717,7 +721,7 @@ with tabs[3]:
                     else "Degeneracy / alternate optimum / inspect solver tolerances"
                 ),
             })
-        st.dataframe(pd.DataFrame(slack_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(slack_rows), width="stretch", hide_index=True)
         st.caption("Complementary slackness: a strictly slack battery constraint must have zero shadow price; a binding constraint can still have zero price.")
         st.subheader("Energy burden by sensor")
         burden = df.sort_values("Energy used (J)", ascending=False)
@@ -725,7 +729,7 @@ with tabs[3]:
                                          marker_color="#0d9488")).update_layout(
             height=320, xaxis_title="Sensor", yaxis_title="Energy used (J)",
             template="plotly_white", margin=dict(l=10, r=10, t=25, b=10)),
-            use_container_width=True)
+            width="stretch")
         st.subheader("LP primal diagnostics")
         eq_resid = np.asarray(lp["solver_result"].eqlin.residual)
         ub_resid = np.asarray(lp["solver_result"].ineqlin.residual)
@@ -749,7 +753,7 @@ with tabs[3]:
             for k, arc in enumerate(net.arcs)
         ])
         with st.expander("Link-level complementary-slackness diagnostics"):
-            st.dataframe(reduced_cost_df, use_container_width=True, hide_index=True)
+            st.dataframe(reduced_cost_df, width="stretch", hide_index=True)
         st.info("Battery shadow prices come from inequality marginals. Flow-conservation dual variables are available in `result.eqlin.marginals`; reduced costs and battery slacks provide complementary-slackness checks.")
 
 # ---------- Experiments and reports ----------
@@ -792,7 +796,7 @@ with tabs[4]:
             st.session_state["sensitivity_results"] = sweep_df
         if st.session_state.get("sensitivity_results") is not None:
             sweep_df = st.session_state["sensitivity_results"]
-            st.dataframe(sweep_df, use_container_width=True, hide_index=True)
+            st.dataframe(sweep_df, width="stretch", hide_index=True)
             if "LP lifetime (s)" in sweep_df:
                 fig_sweep = go.Figure()
                 fig_sweep.add_trace(go.Scatter(x=sweep_df["Value"], y=sweep_df["LP lifetime (s)"],
@@ -801,7 +805,7 @@ with tabs[4]:
                                                mode="lines+markers", name="Shortest path"))
                 fig_sweep.update_layout(height=350, xaxis_title="Swept parameter", yaxis_title="Lifetime (s)",
                                         template="plotly_white")
-                st.plotly_chart(fig_sweep, use_container_width=True)
+                st.plotly_chart(fig_sweep, width="stretch")
                 st.download_button("Download sensitivity sweep CSV", sweep_df.to_csv(index=False).encode("utf-8"),
                                     "wsn_sensitivity_sweep.csv", "text/csv")
 
@@ -847,7 +851,7 @@ with tabs[4]:
         st.session_state.experiment_results = result_rows
     if st.session_state.experiment_results:
         experiment_df = pd.DataFrame(st.session_state.experiment_results)
-        st.dataframe(experiment_df, use_container_width=True, hide_index=True)
+        st.dataframe(experiment_df, width="stretch", hide_index=True)
         valid = experiment_df[experiment_df.get("LP lifetime (s)", pd.Series(dtype=float)).notna()] if "LP lifetime (s)" in experiment_df else pd.DataFrame()
         if not valid.empty:
             st.subheader("Lifetime across seeds")
@@ -856,10 +860,10 @@ with tabs[4]:
             fig.add_trace(go.Box(y=valid["Shortest-path lifetime (s)"], name="Shortest path", boxpoints="all"))
             fig.update_layout(height=380, yaxis_title="Lifetime (s)", template="plotly_white",
                               margin=dict(l=10, r=10, t=25, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             st.write("**LP lifetime summary**")
             stats = valid["LP lifetime (s)"].agg(["mean", "median", "std", "min", "max"]).to_frame().T
-            st.dataframe(stats, use_container_width=True)
+            st.dataframe(stats, width="stretch")
             st.caption("Across-seed statistics reduce dependence on one randomly generated topology.")
         csv = experiment_df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇ Download experiment CSV", csv, "wsn_experiments.csv", "text/csv")
